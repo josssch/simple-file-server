@@ -1,7 +1,7 @@
 use std::{
     fs::File,
     io::{BufReader, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use actix_web::{
@@ -12,6 +12,7 @@ use actix_web::{
 };
 use async_stream::stream;
 use futures::Stream;
+use path_clean::PathClean;
 use serde::{Deserialize, Deserializer};
 
 use crate::config::server::{FileSource, ServerConfig};
@@ -45,6 +46,17 @@ fn string_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
     }
 }
 
+fn secure_virtual_path(base: &Path, user_input: &str) -> Option<PathBuf> {
+    let combined = base.join(user_input).clean();
+
+    // ensure the final cleaned path is still within base
+    if combined.starts_with(base) {
+        Some(combined)
+    } else {
+        None
+    }
+}
+
 #[derive(Deserialize)]
 struct FileOptions {
     #[serde(default, alias = "dl", deserialize_with = "string_bool")]
@@ -65,8 +77,11 @@ pub async fn serve_file(
 
     match &config.files_source {
         FileSource::Local { base_dir } => {
-            let file_path = PathBuf::from(base_dir).join(&file_name);
-            if !file_path.exists() || !file_path.is_file() {
+            let Some(file_path) = secure_virtual_path(base_dir.as_ref(), &file_name) else {
+                return HttpResponse::Forbidden().body("Access to the specified path is forbidden");
+            };
+
+            if !file_path.exists() || !file_path.is_file() || file_path.is_symlink() {
                 return HttpResponse::NotFound().body("File does not exist");
             }
 
