@@ -1,23 +1,35 @@
 use std::{
     fs::File,
-    io::{BufReader, Read},
+    io::{BufReader, Cursor, Read},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use actix_web::{
     HttpRequest, HttpResponse, Responder, get,
     http::header::{CacheControl, CacheDirective, ContentType},
     mime,
-    web::{self, Data, Query},
+    web::{self, Bytes, Data, Query},
 };
 use async_stream::stream;
-use futures::Stream;
+use futures::{Stream, TryStreamExt};
 use path_clean::PathClean;
 use serde::{Deserialize, Deserializer};
 
-use crate::config::server::{FileSource, ServerConfig};
+use crate::{
+    config::server::{FileSource, ServerConfig},
+    state::{FileCache, SharedBytes},
+};
 
-fn stream_contents<R: Read>(source: R) -> impl Stream<Item = actix_web::Result<web::Bytes>> {
+fn stream_web_bytes<R: Read + Send + 'static>(
+    source: R,
+) -> impl Stream<Item = actix_web::Result<Bytes>> {
+    stream_raw_bytes(source).map_ok(|a| Bytes::copy_from_slice(&a))
+}
+
+fn stream_raw_bytes<R: Read + Send + 'static>(
+    source: R,
+) -> impl Stream<Item = actix_web::Result<Vec<u8>>> {
     let mut reader = BufReader::new(source);
 
     stream! {
@@ -32,7 +44,7 @@ fn stream_contents<R: Read>(source: R) -> impl Stream<Item = actix_web::Result<w
                 }
             };
 
-            yield Ok(web::Bytes::copy_from_slice(&buffer[..bytes_read]));
+            yield Ok(Vec::from(&buffer[..bytes_read]));
         }
     }
 }
@@ -75,6 +87,8 @@ pub async fn serve_file(
         .app_data::<Data<ServerConfig>>()
         .expect("missing server config file");
 
+    let file_cache = req.app_data::<FileCache>().expect("missing file cache");
+
     match &config.files_source {
         FileSource::Local { base_dir } => {
             let Some(file_path) = secure_virtual_path(base_dir.as_ref(), &file_name) else {
@@ -85,11 +99,8 @@ pub async fn serve_file(
                 return HttpResponse::NotFound().body("File does not exist");
             }
 
-            let Ok(file) = File::open(&file_path) else {
-                return HttpResponse::InternalServerError().body("Failed to open file");
-            };
-
-            HttpResponse::Ok()
+            // create our initial response builder with common headers, then customize it later
+            let mut builder = HttpResponse::Ok()
                 .insert_header(CacheControl(vec![
                     CacheDirective::Public,
                     CacheDirective::MaxAge(60 * 60), // 1 hour
@@ -100,7 +111,46 @@ pub async fn serve_file(
                     // try to guess mime type from file extension, default to text/plain; charset=utf-8
                     ContentType(mime_guess::from_path(&file_path).first_or(mime::TEXT_PLAIN_UTF_8))
                 })
-                .streaming(stream_contents(file))
+                .take();
+
+            let bytes = file_cache.lock().await.get(&file_path).cloned();
+            match bytes {
+                // if the file is cached, serve it from memory
+                Some(bytes) => {
+                    let cursor = Cursor::new(Arc::clone(&*bytes));
+                    builder.streaming(stream_web_bytes(cursor))
+                }
+
+                // if not cached, read from disk and cache it if its size is <= 10MB
+                None => {
+                    let Ok(file) = File::open(&file_path) else {
+                        return HttpResponse::InternalServerError().body("Failed to open file");
+                    };
+
+                    let file_stream = stream_raw_bytes(file);
+
+                    // checking if the file size is greater than 10MB, if it is, we won't cache it
+                    if let Ok(metadata) = file_path.metadata()
+                        && metadata.len() <= 1000 * 1000 * 10
+                    {
+                        // read all bytes into memory to cache it
+                        let Ok(all_bytes) = file_stream.try_concat().await else {
+                            return HttpResponse::InternalServerError().body("Failed to read file");
+                        };
+
+                        let shared_bytes = SharedBytes::new(all_bytes);
+                        file_cache
+                            .lock()
+                            .await
+                            .insert(file_path, shared_bytes.clone());
+
+                        let cursor = Cursor::new(Arc::clone(&*shared_bytes));
+                        builder.streaming(stream_web_bytes(cursor))
+                    } else {
+                        builder.streaming(file_stream.map_ok(|a| Bytes::copy_from_slice(&a)))
+                    }
+                }
+            }
         }
     }
 }

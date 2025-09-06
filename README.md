@@ -4,7 +4,10 @@ Things this should be able to do:
 
 - [x] Serve static files (obviously)
     - [x] Automatically compress files (gzip, brotli)
-    - [x] Cache files in memory for faster access
+    - [x] Caching
+        - [x] Cache-Control headers
+        - [x] Server-side caching (in-memory or on-disk if remote is added)
+        - [ ] ETag headers
     - [x] Handle large files efficiently (streaming)
     - [ ] CORS rules
     - [ ] Encrypt files at rest

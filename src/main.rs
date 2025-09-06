@@ -1,11 +1,17 @@
+mod cache_map;
 mod config;
 mod routes;
+mod state;
 
 use std::io;
 
 use actix_web::{App, HttpServer, middleware::Compress, web::Data};
+use futures::lock::Mutex;
 
-use crate::{config::server::ServerConfig, routes::serve_files::serve_file};
+use crate::{
+    cache_map::CacheMap, config::server::ServerConfig, routes::serve_files::serve_file,
+    state::FileCache,
+};
 
 #[actix_web::main]
 async fn main() -> io::Result<()> {
@@ -15,6 +21,8 @@ async fn main() -> io::Result<()> {
     let config = config_file.take().expect("just read from file");
     let binding = (config.host.clone(), config.port);
 
+    let file_cache = FileCache::new(Mutex::new(CacheMap::new()));
+
     println!("Starting server at http://{}:{}", config.host, config.port);
 
     let config_data = Data::new(config);
@@ -23,6 +31,7 @@ async fn main() -> io::Result<()> {
         // (which is what this function closure is for generating)
         App::new()
             .app_data(config_data.clone())
+            .app_data(file_cache.clone())
             .wrap(Compress::default())
             .service(serve_file)
     })
