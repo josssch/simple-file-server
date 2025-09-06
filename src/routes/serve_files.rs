@@ -129,9 +129,10 @@ pub async fn serve_file(
 
                     let file_stream = stream_raw_bytes(file);
 
-                    // checking if the file size is greater than 10MB, if it is, we won't cache it
-                    if let Ok(metadata) = file_path.metadata()
-                        && metadata.len() <= 1000 * 1000 * 10
+                    // checking if the file size is greater than the threshold, if it is, we won't cache it
+                    if config.memory_cache.enabled
+                        && let Ok(metadata) = file_path.metadata()
+                        && metadata.len() <= config.memory_cache.max_size_bytes
                     {
                         // read all bytes into memory to cache it
                         let Ok(all_bytes) = file_stream.try_concat().await else {
@@ -147,7 +148,7 @@ pub async fn serve_file(
                         let cursor = Cursor::new(Arc::clone(&*shared_bytes));
                         builder.streaming(stream_web_bytes(cursor))
                     } else {
-                        builder.streaming(file_stream.map_ok(|a| Bytes::copy_from_slice(&a)))
+                        builder.streaming(file_stream.map_ok(|b| Bytes::copy_from_slice(&b)))
                     }
                 }
             }

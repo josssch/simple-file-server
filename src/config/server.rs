@@ -21,6 +21,35 @@ impl Default for FileSource {
 
 #[derive(DefaultFromSerde, Serialize, Deserialize, Debug)]
 #[serde(default)]
+pub struct MemoryCache {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_cache_time_secs")]
+    pub cache_time_secs: u64,
+    #[serde(default = "default_max_size_bytes")]
+    pub max_size_bytes: u64,
+    #[serde(default = "default_max_files_cached")]
+    pub max_files_cached: usize,
+}
+
+const fn default_enabled() -> bool {
+    true
+}
+
+const fn default_cache_time_secs() -> u64 {
+    300 // 5 minutes
+}
+
+const fn default_max_size_bytes() -> u64 {
+    10 * 1024 * 1024 // 10 MB
+}
+
+const fn default_max_files_cached() -> usize {
+    100 // 100 files * ~10MB each = ~1GB max of cached files
+}
+
+#[derive(DefaultFromSerde, Serialize, Deserialize, Debug)]
+#[serde(default)]
 pub struct ServerConfig {
     #[serde(default = "default_host")]
     pub host: String,
@@ -28,6 +57,7 @@ pub struct ServerConfig {
     pub port: u16,
     #[serde(default = "FileSource::default")]
     pub files_source: FileSource,
+    pub memory_cache: MemoryCache,
 }
 
 impl ServerConfig {
@@ -40,6 +70,6 @@ fn default_host() -> String {
     "0.0.0.0".to_string()
 }
 
-fn default_port() -> u16 {
+const fn default_port() -> u16 {
     3000
 }

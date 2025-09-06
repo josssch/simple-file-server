@@ -83,8 +83,4 @@ impl<K: Hash + Eq + Clone, V> CacheMap<K, V> {
             self.inner.remove(&key);
         }
     }
-
-    pub fn size(&self) -> usize {
-        self.inner.len()
-    }
 }

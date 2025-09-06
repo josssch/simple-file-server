@@ -3,7 +3,7 @@ mod config;
 mod routes;
 mod state;
 
-use std::io;
+use std::{io, time::Duration};
 
 use actix_web::{App, HttpServer, middleware::Compress, web::Data};
 use futures::lock::Mutex;
@@ -21,7 +21,11 @@ async fn main() -> io::Result<()> {
     let config = config_file.take().expect("just read from file");
     let binding = (config.host.clone(), config.port);
 
-    let file_cache = FileCache::new(Mutex::new(CacheMap::new()));
+    let file_cache = FileCache::new(Mutex::new(
+        CacheMap::new()
+            .with_max_size(config.memory_cache.max_files_cached)
+            .with_ttl(Duration::from_secs(config.memory_cache.cache_time_secs)),
+    ));
 
     println!("Starting server at http://{}:{}", config.host, config.port);
 
