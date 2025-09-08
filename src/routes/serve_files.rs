@@ -6,8 +6,8 @@ use std::{
 };
 
 use actix_web::{
-    HttpRequest, HttpResponse, Responder, get,
-    http::header::{CacheControl, CacheDirective, ContentType},
+    HttpRequest, HttpResponse, HttpResponseBuilder, Responder, get,
+    http::header::{self, CacheControl, CacheDirective, ContentType},
     mime,
     web::{self, Bytes, Data, Query},
 };
@@ -18,7 +18,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::{
     config::server::{FileSource, ServerConfig},
-    state::{FileCache, SharedBytes},
+    state::{CachedFileEntry, FileCache},
 };
 
 fn stream_web_bytes<R: Read + Send + 'static>(
@@ -101,57 +101,82 @@ pub async fn serve_file(
 
             // create our initial response builder with common headers, then customize it later
             let mut builder = HttpResponse::Ok()
+                .insert_header((header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"))
+                .content_type(if query.download {
+                    ContentType::octet_stream()
+                } else {
+                    // try to guess mime type from file extension, except HTML files to prevent
+                    // rendering, default to text/plain; charset=utf-8
+                    ContentType(
+                        mime_guess::from_path(&file_path)
+                            .first()
+                            .filter(|m| m.subtype() != mime::HTML)
+                            .unwrap_or(mime::TEXT_PLAIN_UTF_8),
+                    )
+                })
+                .take();
+
+            // if the file is cached, serve it from memory instead of disk
+            if let Some(file) = file_cache.lock().await.get(&file_path).cloned() {
+                return response_from_file(&req, &file, builder);
+            }
+
+            // open the file and open a stream to it
+            let Ok(file_bytes_stream) = File::open(&file_path).map(stream_raw_bytes) else {
+                return HttpResponse::InternalServerError().body("Failed to open file");
+            };
+
+            // checking if the file size is greater than the threshold, if it is, we won't cache it
+            if config.memory_cache.enabled
+                && let Ok(metadata) = file_path.metadata()
+                && metadata.len() <= config.memory_cache.max_size_bytes
+            {
+                // in order to cache the file, we need to stream all its bytes into memory first
+                // (this is only okay because we already checked the file size above)
+                let Ok(all_bytes) = file_bytes_stream.try_concat().await else {
+                    return HttpResponse::InternalServerError().body("Failed to read file");
+                };
+
+                let file_entry = CachedFileEntry::new(all_bytes);
+                let response = response_from_file(&req, &file_entry, builder);
+
+                // now finally insert the cached entry into the cache
+                file_cache.lock().await.insert(file_path, file_entry);
+
+                return response;
+            }
+
+            // if we get here, it means we are not caching the file, so just stream it directly
+            // and instead of an ETag, we add Cache-Control headers since calculating the hash
+            // would require reading the entire file anyway, which I want to avoid
+            // todo: once I introduce an api for upload, I will store file information at that time
+            builder
                 .insert_header(CacheControl(vec![
                     CacheDirective::Public,
                     CacheDirective::MaxAge(60 * 60), // 1 hour
                 ]))
-                .content_type(if query.download {
-                    ContentType::octet_stream()
-                } else {
-                    // try to guess mime type from file extension, default to text/plain; charset=utf-8
-                    ContentType(mime_guess::from_path(&file_path).first_or(mime::TEXT_PLAIN_UTF_8))
-                })
-                .take();
-
-            let bytes = file_cache.lock().await.get(&file_path).cloned();
-            match bytes {
-                // if the file is cached, serve it from memory
-                Some(bytes) => {
-                    let cursor = Cursor::new(Arc::clone(&*bytes));
-                    builder.streaming(stream_web_bytes(cursor))
-                }
-
-                // if not cached, read from disk and cache it if its size is <= 10MB
-                None => {
-                    let Ok(file) = File::open(&file_path) else {
-                        return HttpResponse::InternalServerError().body("Failed to open file");
-                    };
-
-                    let file_stream = stream_raw_bytes(file);
-
-                    // checking if the file size is greater than the threshold, if it is, we won't cache it
-                    if config.memory_cache.enabled
-                        && let Ok(metadata) = file_path.metadata()
-                        && metadata.len() <= config.memory_cache.max_size_bytes
-                    {
-                        // read all bytes into memory to cache it
-                        let Ok(all_bytes) = file_stream.try_concat().await else {
-                            return HttpResponse::InternalServerError().body("Failed to read file");
-                        };
-
-                        let shared_bytes = SharedBytes::new(all_bytes);
-                        file_cache
-                            .lock()
-                            .await
-                            .insert(file_path, shared_bytes.clone());
-
-                        let cursor = Cursor::new(Arc::clone(&*shared_bytes));
-                        builder.streaming(stream_web_bytes(cursor))
-                    } else {
-                        builder.streaming(file_stream.map_ok(|b| Bytes::copy_from_slice(&b)))
-                    }
-                }
-            }
+                .streaming(file_bytes_stream.map_ok(|b| Bytes::copy_from_slice(&b)))
         }
     }
+}
+
+fn response_from_file(
+    req: &HttpRequest,
+    file: &CachedFileEntry,
+    mut base_response: HttpResponseBuilder,
+) -> HttpResponse {
+    let etag = req
+        .headers()
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok());
+
+    if etag.is_some_and(|t| t == file.hash()) {
+        return HttpResponse::NotModified().finish();
+    }
+
+    let cursor = Cursor::new(Arc::clone(file.bytes()));
+
+    return base_response
+        .insert_header((header::ETAG, file.hash().to_string()))
+        .streaming(stream_web_bytes(cursor));
 }
