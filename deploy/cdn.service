@@ -1,0 +1,15 @@
+[Unit]
+Description=CDN Production
+After=network.target
+
+[Service]
+Type=simple
+User=production
+Group=cdn
+WorkingDirectory=/opt/prod/cdn
+ExecStart=/opt/prod/cdn/cdn
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
