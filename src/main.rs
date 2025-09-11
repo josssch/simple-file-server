@@ -16,7 +16,7 @@ use crate::{
 #[actix_web::main]
 async fn main() -> io::Result<()> {
     let mut config_file = ServerConfig::new_file();
-    config_file.read_from_file()?;
+    config_file.read_and_save()?;
 
     let config = config_file.take().expect("just read from file");
     let binding = (config.host.clone(), config.port);
