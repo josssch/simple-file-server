@@ -1,10 +1,9 @@
 use std::{
-    cell::RefCell,
     fs::File,
     io::{self, BufReader, Read},
     iter,
     path::{Path, PathBuf},
-    rc::Rc,
+    sync::{Arc, Mutex},
 };
 
 use path_clean::PathClean;
@@ -13,10 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::cache_map::CacheMap;
 
 pub trait FileStore {
-    type File: ServeableFile;
-
-    fn exists(&self, path: impl AsRef<Path>) -> bool;
-    fn get_file(&self, path: impl AsRef<Path>) -> Option<Rc<Self::File>>;
+    fn exists(&self, path: &Path) -> bool;
+    fn get_file(&self, path: &Path) -> Option<Arc<dyn ServeableFile>>;
 }
 
 pub trait ServeableFile {
@@ -45,14 +42,14 @@ impl FileMetadata {
 
 pub struct FsFileStore {
     base_path: PathBuf,
-    cache: RefCell<CacheMap<PathBuf, Rc<FsFile>>>,
+    cache: Mutex<CacheMap<PathBuf, Arc<FsFile>>>,
 }
 
 impl FsFileStore {
     pub fn new(base_path: impl AsRef<Path>) -> Self {
         FsFileStore {
             base_path: base_path.as_ref().to_path_buf(),
-            cache: RefCell::new(CacheMap::new()),
+            cache: Mutex::new(CacheMap::new()),
         }
     }
 
@@ -71,25 +68,23 @@ impl FsFileStore {
 }
 
 impl FileStore for FsFileStore {
-    type File = FsFile;
-
-    fn exists(&self, path: impl AsRef<Path>) -> bool {
+    fn exists(&self, path: &Path) -> bool {
         self.full_path(path).is_some_and(|p| p.is_file())
     }
 
-    fn get_file(&self, path: impl AsRef<Path>) -> Option<Rc<Self::File>> {
-        if !self.exists(&path) {
+    fn get_file(&self, path: &Path) -> Option<Arc<dyn ServeableFile>> {
+        if !self.exists(path) {
             return None;
         }
 
         let file_path = self.full_path(path)?;
-        let mut cache = self.cache.borrow_mut();
+        let mut cache = self.cache.lock().unwrap();
         if let Some(file) = cache.get(&file_path) {
             return Some(file.clone());
         }
 
-        let file = Rc::new(FsFile::new_existing(&file_path));
-        cache.insert(file_path.clone(), Rc::clone(&file));
+        let file = Arc::new(FsFile::new_existing(&file_path));
+        cache.insert(file_path.clone(), Arc::clone(&file));
 
         Some(file)
     }

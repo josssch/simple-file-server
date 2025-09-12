@@ -9,9 +9,12 @@ use std::io;
 use actix_web::{App, HttpServer, web::Data};
 
 use crate::{
-    config::server::ServerConfig,
+    config::server::{FileSource, ServerConfig},
+    file_store::{FileStore, FsFileStore},
     routes::{ScopeCreator, api::ApiRoute, serve_files::FileServeRoute},
 };
+
+pub type SharedFileStore = Box<dyn FileStore + Send + Sync>;
 
 #[actix_web::main]
 async fn main() -> io::Result<()> {
@@ -23,6 +26,9 @@ async fn main() -> io::Result<()> {
 
     println!("Starting server at http://{}:{}", config.host, config.port);
 
+    let file_store: Data<SharedFileStore> = Data::new(match &config.files_source {
+        FileSource::Local { base_dir } => Box::new(FsFileStore::new(&base_dir)),
+    });
     let config_data: Data<ServerConfig> = Data::new(config);
 
     HttpServer::new(move || {
@@ -30,6 +36,7 @@ async fn main() -> io::Result<()> {
         // (which is what this function closure is for generating)
         App::new()
             .app_data(config_data.clone())
+            .app_data(file_store.clone())
             .service(ApiRoute::create_scope())
             .service(FileServeRoute::create_scope())
     })
