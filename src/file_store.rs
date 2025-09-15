@@ -8,6 +8,7 @@ use std::{
 
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::cache_map::CacheMap;
 
@@ -24,17 +25,13 @@ pub trait ServeableFile {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FileMetadata {
-    hash: String,
-    size_bytes: u64,
+    pub hash: String,
+    pub size_bytes: u64,
 }
 
 impl FileMetadata {
-    pub fn hash(&self) -> &str {
-        &self.hash
-    }
-
-    pub fn size_bytes(&self) -> u64 {
-        self.size_bytes
+    pub fn hash_to_hex(digest: Sha256) -> String {
+        format!("{:x}", digest.finalize())
     }
 }
 
@@ -147,7 +144,7 @@ impl ServeableFile for FsFile {
         &self.metadata
     }
 
-    fn bytes_iter(&self) -> Box<dyn Iterator<Item = Result<Vec<u8>, std::io::Error>> + 'static> {
+    fn bytes_iter(&self) -> Box<dyn Iterator<Item = io::Result<Vec<u8>>> + 'static> {
         let file = File::open(&self.path).unwrap();
 
         let mut reader = BufReader::new(file);

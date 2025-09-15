@@ -51,7 +51,7 @@ pub async fn serve_file(
     };
 
     let file = file.as_ref();
-    let hash = file.metadata().hash();
+    let hash = &file.metadata().hash;
 
     if let Some(etag) = req
         .headers()
