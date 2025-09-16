@@ -37,7 +37,10 @@ jobs:
 
             - name: Restart service
               uses: appleboy/ssh-action@v1
+              env:
+                  TARGET_PATH: ${{ secrets.SERVER_TARGET_PATH }}
               with:
+                  envs: TARGET_PATH
                   host: ${{ secrets.SERVER_HOST }}
                   username: ${{ secrets.SERVER_USER }}
                   key: ${{ secrets.SERVER_SSH_KEY }}
