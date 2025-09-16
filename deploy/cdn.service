@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=production
 Group=cdn
+EnvironmentFile=/etc/secrets/cdn.env
 WorkingDirectory=/opt/prod/cdn
 ExecStart=/opt/prod/cdn/cdn
 Restart=always
