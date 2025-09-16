@@ -17,6 +17,5 @@ Things this should be able to do:
     - [ ] Web access (files.example.com/`{file}`)
 - API for file management
     - [x] Simple JWT authentication
-    - [ ] `POST /{file}` to upload files
-    - [ ] `PUT /{file}` to update files
+    - [x] `POST /{file}` to upsert files
     - [ ] `DELETE /{file}` to delete files

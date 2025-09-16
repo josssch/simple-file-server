@@ -1,6 +1,6 @@
 use std::{
-    fs::File,
-    io::{self, BufReader, Read},
+    fs::{self, File},
+    io::{self, BufReader, Read, Write},
     iter,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -15,6 +15,7 @@ use crate::cache_map::CacheMap;
 pub trait FileStore {
     fn exists(&self, path: &Path) -> bool;
     fn get_file(&self, path: &Path) -> Option<Arc<dyn ServeableFile>>;
+    fn upload(&self, path: &Path, reader: BufReader<File>) -> io::Result<()>;
 }
 
 pub trait ServeableFile {
@@ -84,6 +85,53 @@ impl FileStore for FsFileStore {
         cache.insert(file_path.clone(), Arc::clone(&file));
 
         Some(file)
+    }
+
+    fn upload(&self, path: &Path, mut reader: BufReader<File>) -> io::Result<()> {
+        let path = self.full_path(path).ok_or(io::Error::new(
+            io::ErrorKind::InvalidFilename,
+            "provided file path is in an invalid place",
+        ))?;
+
+        let mut target_file = File::create(&path)?;
+
+        let mut digest = Sha256::new();
+        let mut buffer = [0u8; 8192];
+        let mut written_bytes: u64 = 0;
+
+        loop {
+            let n = match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(err) => {
+                    // attempt to clean up partial file on error
+                    let _ = fs::remove_file(&path);
+                    return Err(err);
+                }
+            };
+
+            written_bytes += n as u64;
+            let bytes = &buffer[..n];
+
+            if let Err(err) = target_file.write(bytes) {
+                let _ = fs::remove_file(&path);
+                return Err(err);
+            }
+
+            digest.update(bytes);
+        }
+
+        let hash = FileMetadata::hash_to_hex(digest);
+        let metadata = FileMetadata {
+            hash,
+            size_bytes: written_bytes,
+        };
+
+        let metadata_path = metadata_path(&path);
+        let metadata_file = File::create(&metadata_path)?;
+        serde_json::to_writer(metadata_file, &metadata)?;
+
+        Ok(())
     }
 }
 
