@@ -1,3 +1,5 @@
+use std::env;
+
 use actix_web::{
     HttpMessage, HttpResponse, Result,
     body::{EitherBody, MessageBody},
@@ -45,7 +47,13 @@ pub async fn is_authorized(
         }
     };
 
-    let hmac: Hmac<Sha256> = Hmac::new_from_slice(b"key").unwrap();
+    let hmac: Hmac<Sha256> = Hmac::new_from_slice(
+        env::var("JWT_SESSION_SECRET")
+            .expect("missing JWT_SESSION_SECRET environment variable")
+            .as_bytes(),
+    )
+    .unwrap();
+
     let Ok(payload): Result<AuthPayload, _> = auth_token.verify_with_key(&hmac) else {
         return Ok(req.into_response(HttpResponse::Forbidden().finish().map_into_right_body()));
     };
