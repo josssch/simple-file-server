@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 
-cd /opt/production/cdn || exit
+cd "$TARGET_PATH" || exit
 
 sudo systemctl restart cdn.service
