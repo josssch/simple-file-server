@@ -57,11 +57,32 @@ impl FsFileStore {
         let combined = self.base_path.join(path).clean();
 
         // ensure the final cleaned path is still within base directory
-        if combined.starts_with(&self.base_path) {
+        if combined.starts_with(&self.base_path) && combined.file_name().is_some() {
             Some(combined)
         } else {
             None
         }
+    }
+
+    fn is_valid_path(&self, path: impl AsRef<Path>) -> bool {
+        let path = path.as_ref();
+
+        let name = match path.file_name().and_then(|p| p.to_str()) {
+            Some(name) => name.to_ascii_lowercase(),
+            _ => return false,
+        };
+
+        if name.ends_with(METADATA_FILE_EXT) {
+            return false;
+        }
+
+        // get where the /api path would be, resulting in path conflicts
+        let api_path = self.full_path("api").unwrap();
+        if path.starts_with(api_path) {
+            return false;
+        }
+
+        true
     }
 }
 
@@ -89,9 +110,21 @@ impl FileStore for FsFileStore {
 
     fn upload(&self, path: &Path, mut reader: BufReader<File>) -> io::Result<()> {
         let path = self.full_path(path).ok_or(io::Error::new(
-            io::ErrorKind::InvalidFilename,
+            io::ErrorKind::InvalidInput,
             "provided file path is in an invalid place",
         ))?;
+
+        if !self.is_valid_path(&path) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot upload due to invalid file name or path",
+            ));
+        }
+
+        // ensure parent directories exist, if any
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
 
         let mut target_file = File::create(&path)?;
 
