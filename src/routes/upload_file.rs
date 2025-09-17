@@ -26,6 +26,9 @@ pub async fn upload_file(
 
     match file_store.upload(&path, BufReader::new(form.file.file.into_file())) {
         Ok(_) => HttpResponse::Created().finish(),
+        Err(err) if err.kind() == io::ErrorKind::InvalidInput => {
+            HttpResponse::BadRequest().body(format!("Invalid input: {err}"))
+        }
         Err(err) => {
             eprintln!("Error uploading file: {err}");
             HttpResponse::InternalServerError().body("Failed to upload file")
