@@ -12,7 +12,11 @@ use actix_web::{
 use futures::stream;
 use serde::{Deserialize, Deserializer};
 
-use crate::{SharedFileStore, routes::ScopeCreator};
+use crate::{
+    SharedFileStore,
+    file_store::{FileStorageCore, StoredFileCore},
+    routes::ScopeCreator,
+};
 
 pub struct FileServeRoute;
 
