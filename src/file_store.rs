@@ -16,6 +16,7 @@ pub trait FileStore {
     fn exists(&self, path: &Path) -> bool;
     fn get_file(&self, path: &Path) -> Option<Arc<dyn ServeableFile>>;
     fn upload(&self, path: &Path, reader: BufReader<File>) -> io::Result<()>;
+    fn remove(&self, path: &Path) -> io::Result<()>;
 }
 
 pub trait ServeableFile {
@@ -63,6 +64,33 @@ impl FsFileStore {
             None
         }
     }
+
+    /// Makes sure the provided path is valid for usage, it cannot be named in a way that
+    /// would conflict with metadata files, and it cannot be inside the "api" directory.
+    fn is_valid_path(&self, path: impl AsRef<Path>) -> bool {
+        let path = path.as_ref();
+
+        let Some(str) = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_ascii_lowercase())
+        else {
+            return false;
+        };
+
+        // this relies on the assumption that METADATA_FILE_EXT is all lowercase, which isn't
+        // necessarily good, but is fine for now
+        if str.ends_with(METADATA_FILE_EXT) {
+            return false;
+        }
+
+        let api_path = self.full_path("api").unwrap();
+        if path.starts_with(api_path) {
+            return false;
+        }
+
+        true
+    }
 }
 
 impl FileStore for FsFileStore {
@@ -92,6 +120,13 @@ impl FileStore for FsFileStore {
             io::ErrorKind::InvalidFilename,
             "provided file path is in an invalid place",
         ))?;
+
+        if !self.is_valid_path(&path) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot upload due to invalid file name or path",
+            ));
+        }
 
         let mut target_file = File::create(&path)?;
 
@@ -133,6 +168,32 @@ impl FileStore for FsFileStore {
 
         Ok(())
     }
+
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        let path = self.full_path(path).ok_or(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "provided file path is in an invalid place",
+        ))?;
+
+        if !self.is_valid_path(&path) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot remove due to invalid file name or path",
+            ));
+        }
+
+        if !self.exists(&path) {
+            return Ok(());
+        }
+
+        fs::remove_file(&path)?;
+        let metadata_path = metadata_path(&path);
+        if metadata_path.is_file() {
+            fs::remove_file(metadata_path)?;
+        }
+
+        Ok(())
+    }
 }
 
 pub const METADATA_FILE_EXT: &str = ".metadata.json";
@@ -154,11 +215,6 @@ pub struct FsFile {
 }
 
 impl FsFile {
-    #[allow(unused)]
-    pub fn create() -> Self {
-        todo!()
-    }
-
     pub fn new_existing(file_path: impl AsRef<Path>) -> Self {
         let path = file_path.as_ref().to_path_buf();
         let metadata_path = metadata_path(&path);

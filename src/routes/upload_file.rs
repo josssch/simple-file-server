@@ -1,8 +1,11 @@
-use std::{io::BufReader, path::PathBuf};
+use std::{
+    io::{self, BufReader},
+    path::PathBuf,
+};
 
 use actix_multipart::form::{MultipartForm, tempfile::TempFile};
 use actix_web::{
-    HttpResponse, Responder, post,
+    HttpResponse, Responder, delete, post,
     web::{self, Data},
 };
 
@@ -26,6 +29,25 @@ pub async fn upload_file(
         Err(err) => {
             eprintln!("Error uploading file: {err}");
             HttpResponse::InternalServerError().body("Failed to upload file")
+        }
+    }
+}
+
+#[delete("/delete/{path:.*}")]
+pub async fn delete_file(
+    path: web::Path<String>,
+    file_store: Data<SharedFileStore>,
+) -> impl Responder {
+    let path = PathBuf::from(path.into_inner());
+
+    match file_store.remove(&path) {
+        Ok(_) => HttpResponse::Ok().body("File deleted"),
+        Err(err) if err.kind() == io::ErrorKind::InvalidInput => {
+            HttpResponse::BadRequest().body(format!("Invalid input: {err}"))
+        }
+        Err(err) => {
+            eprintln!("Error deleting file: {err}");
+            HttpResponse::InternalServerError().body("Failed to delete file")
         }
     }
 }
