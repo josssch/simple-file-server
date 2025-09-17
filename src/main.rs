@@ -4,17 +4,17 @@ mod config;
 mod file_store;
 mod routes;
 
-use std::io;
+use std::{io, sync::Arc};
 
 use actix_web::{App, HttpServer, web::Data};
 
 use crate::{
-    config::server::{FileSource, ServerConfig},
-    file_store::{FileStore, FsFileStore},
+    config::server::ServerConfig,
+    file_store::FileStore,
     routes::{ScopeCreator, api::ApiRoute, serve_files::FileServeRoute},
 };
 
-pub type SharedFileStore = Box<dyn FileStore + Send + Sync>;
+pub type SharedFileStore = Arc<FileStore>;
 
 #[actix_web::main]
 async fn main() -> io::Result<()> {
@@ -26,9 +26,8 @@ async fn main() -> io::Result<()> {
 
     println!("Starting server at http://{}:{}", config.host, config.port);
 
-    let file_store: Data<SharedFileStore> = Data::new(match &config.files_source {
-        FileSource::Local { base_dir } => Box::new(FsFileStore::new(&base_dir)),
-    });
+    let file_store: Data<SharedFileStore> =
+        Data::new(Arc::new(FileStore::from(&config.files_source)));
     let config_data: Data<ServerConfig> = Data::new(config);
 
     HttpServer::new(move || {

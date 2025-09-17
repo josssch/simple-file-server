@@ -9,7 +9,7 @@ use actix_web::{
     web::{self, Data},
 };
 
-use crate::SharedFileStore;
+use crate::{SharedFileStore, file_store::FileStorageCore};
 
 #[derive(Debug, MultipartForm)]
 struct UploadFileForm {

@@ -10,19 +10,74 @@ use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::cache_map::CacheMap;
+use crate::{cache_map::CacheMap, config::server::FileSource};
 
-pub trait FileStore {
+pub trait FileStorageCore {
     fn exists(&self, path: &Path) -> bool;
-    fn get_file(&self, path: &Path) -> Option<Arc<dyn ServeableFile>>;
+    fn get_file(&self, path: &Path) -> Option<Arc<StoredFile>>;
     fn upload(&self, path: &Path, reader: BufReader<File>) -> io::Result<()>;
     fn remove(&self, path: &Path) -> io::Result<()>;
 }
 
-pub trait ServeableFile {
-    fn name(&self) -> &str;
+pub enum FileStore {
+    Filesystem(FsFileStore),
+}
+
+impl FileStorageCore for FileStore {
+    fn exists(&self, path: &Path) -> bool {
+        match self {
+            FileStore::Filesystem(fs_store) => fs_store.exists(path),
+        }
+    }
+
+    fn get_file(&self, path: &Path) -> Option<Arc<StoredFile>> {
+        match self {
+            FileStore::Filesystem(fs_store) => fs_store.get_file(path),
+        }
+    }
+
+    fn upload(&self, path: &Path, reader: BufReader<File>) -> io::Result<()> {
+        match self {
+            FileStore::Filesystem(fs_store) => fs_store.upload(path, reader),
+        }
+    }
+
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        match self {
+            FileStore::Filesystem(fs_store) => fs_store.remove(path),
+        }
+    }
+}
+
+impl From<&FileSource> for FileStore {
+    fn from(value: &FileSource) -> Self {
+        match value {
+            FileSource::Local { base_dir } => FileStore::Filesystem(FsFileStore::new(base_dir)),
+        }
+    }
+}
+
+pub trait StoredFileCore {
     fn metadata(&self) -> &FileMetadata;
     fn bytes_iter(&self) -> Box<dyn Iterator<Item = io::Result<Vec<u8>>> + 'static>;
+}
+
+pub enum StoredFile {
+    Filesystem(FsFile),
+}
+
+impl StoredFileCore for StoredFile {
+    fn metadata(&self) -> &FileMetadata {
+        match self {
+            StoredFile::Filesystem(fs_file) => fs_file.metadata(),
+        }
+    }
+
+    fn bytes_iter(&self) -> Box<dyn Iterator<Item = io::Result<Vec<u8>>> + 'static> {
+        match self {
+            StoredFile::Filesystem(fs_file) => fs_file.bytes_iter(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -41,7 +96,7 @@ impl FileMetadata {
 
 pub struct FsFileStore {
     base_path: PathBuf,
-    cache: Mutex<CacheMap<PathBuf, Arc<FsFile>>>,
+    cache: Mutex<CacheMap<PathBuf, Arc<StoredFile>>>,
 }
 
 impl FsFileStore {
@@ -93,12 +148,12 @@ impl FsFileStore {
     }
 }
 
-impl FileStore for FsFileStore {
+impl FileStorageCore for FsFileStore {
     fn exists(&self, path: &Path) -> bool {
         self.full_path(path).is_some_and(|p| p.is_file())
     }
 
-    fn get_file(&self, path: &Path) -> Option<Arc<dyn ServeableFile>> {
+    fn get_file(&self, path: &Path) -> Option<Arc<StoredFile>> {
         if !self.exists(path) {
             return None;
         }
@@ -109,7 +164,7 @@ impl FileStore for FsFileStore {
             return Some(file.clone());
         }
 
-        let file = Arc::new(FsFile::new_existing(&file_path));
+        let file = Arc::new(FsFile::new_existing(&file_path).into());
         cache.insert(file_path.clone(), Arc::clone(&file));
 
         Some(file)
@@ -241,14 +296,13 @@ impl FsFile {
     }
 }
 
-impl ServeableFile for FsFile {
-    fn name(&self) -> &str {
-        self.path
-            .file_name()
-            .and_then(|os_str| os_str.to_str())
-            .unwrap_or("unknown")
+impl From<FsFile> for StoredFile {
+    fn from(value: FsFile) -> Self {
+        StoredFile::Filesystem(value)
     }
+}
 
+impl StoredFileCore for FsFile {
     fn metadata(&self) -> &FileMetadata {
         &self.metadata
     }
