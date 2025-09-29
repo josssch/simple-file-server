@@ -16,7 +16,13 @@ struct UploadFileForm {
     file: TempFile,
 }
 
-#[post("/upload/{path:.*}")]
+// I would love for these routes to only have different HTTP methods
+// with the same path (i.e. GET /:file, POST /:file, and DELETE /:file).
+// However, due to there needing to be different guards/middleware per these routes
+// and an issue with actix-web (https://github.com/actix/actix-web/issues/2904), it can't happen
+// without some hackery on my part, which I don't want to do right now
+
+#[post("/{path:.*}")]
 pub async fn upload_file(
     path: web::Path<String>,
     MultipartForm(form): MultipartForm<UploadFileForm>,
@@ -36,7 +42,7 @@ pub async fn upload_file(
     }
 }
 
-#[delete("/delete/{path:.*}")]
+#[delete("/{path:.*}")]
 pub async fn delete_file(
     path: web::Path<String>,
     file_store: Data<SharedFileStore>,
