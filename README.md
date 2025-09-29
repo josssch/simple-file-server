@@ -18,4 +18,4 @@ Things this should be able to do:
 - API for file management
     - [x] Simple JWT authentication
     - [x] `POST /{file}` to upsert files
-    - [ ] `DELETE /{file}` to delete files
+    - [x] `DELETE /{file}` to delete files
