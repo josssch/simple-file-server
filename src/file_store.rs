@@ -120,25 +120,20 @@ impl FsFileStore {
         }
     }
 
-    /// Makes sure the provided path is valid for usage, it cannot be named in a way that
-    /// would conflict with metadata files, and it cannot be inside the "api" directory.
     fn is_valid_path(&self, path: impl AsRef<Path>) -> bool {
         let path = path.as_ref();
 
-        let Some(str) = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|s| s.to_ascii_lowercase())
-        else {
-            return false;
+        let name = match path.file_name().and_then(|p| p.to_str()) {
+            Some(name) => name.to_ascii_lowercase(),
+            _ => return false,
         };
 
-        // this relies on the assumption that METADATA_FILE_EXT is all lowercase, which isn't
-        // necessarily good, but is fine for now
-        if str.ends_with(METADATA_FILE_EXT) {
+        // this relies on the assumption that METADATA_FILE_EXT is all lowercase
+        if name.ends_with(METADATA_FILE_EXT) {
             return false;
         }
 
+        // get where the /api path would be, resulting in path conflicts
         let api_path = self.full_path("api").unwrap();
         if path.starts_with(api_path) {
             return false;
