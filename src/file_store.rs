@@ -2,7 +2,7 @@ use std::{
     fs::{self, File},
     io::{self, BufReader, Read, Write},
     iter,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -99,6 +99,11 @@ pub struct FsFileStore {
     cache: Mutex<CacheMap<PathBuf, Arc<StoredFile>>>,
 }
 
+struct ResolvedPath {
+    full: PathBuf,
+    relative: PathBuf,
+}
+
 impl FsFileStore {
     pub fn new(base_path: impl AsRef<Path>) -> Self {
         FsFileStore {
@@ -107,23 +112,32 @@ impl FsFileStore {
         }
     }
 
-    fn full_path(&self, path: impl AsRef<Path>) -> Option<PathBuf> {
+    fn resolve_path(&self, path: impl AsRef<Path>) -> Option<ResolvedPath> {
+        let path = path.as_ref();
+
+        if path.is_absolute() {
+            return None;
+        }
+
         // makes use of path_clean crate to clean up any .. or . segments
         // to prevent directory traversal attacks
         let combined = self.base_path.join(path).clean();
 
         // ensure the final cleaned path is still within base directory
-        if combined.starts_with(&self.base_path) && combined.file_name().is_some() {
-            Some(combined)
-        } else {
-            None
+        if !combined.starts_with(&self.base_path) || combined.file_name().is_none() {
+            return None;
         }
+
+        let relative = combined.strip_prefix(&self.base_path).ok()?.to_path_buf();
+
+        Some(ResolvedPath {
+            full: combined,
+            relative,
+        })
     }
 
-    fn is_valid_path(&self, path: impl AsRef<Path>) -> bool {
-        let path = path.as_ref();
-
-        let name = match path.file_name().and_then(|p| p.to_str()) {
+    fn is_valid_path(&self, relative_path: &Path) -> bool {
+        let name = match relative_path.file_name().and_then(|p| p.to_str()) {
             Some(name) => name.to_ascii_lowercase(),
             _ => return false,
         };
@@ -133,10 +147,14 @@ impl FsFileStore {
             return false;
         }
 
-        // get where the /api path would be, resulting in path conflicts
-        let api_path = self.full_path("api").unwrap();
-        if path.starts_with(api_path) {
-            return false;
+        if let Some(Component::Normal(first_component)) = relative_path.components().next() {
+            if let Some(first_component) = first_component.to_str() {
+                if first_component == "api" {
+                    return false;
+                }
+            } else {
+                return false;
+            }
         }
 
         true
@@ -145,38 +163,57 @@ impl FsFileStore {
 
 impl FileStorageCore for FsFileStore {
     fn exists(&self, path: &Path) -> bool {
-        self.full_path(path).is_some_and(|p| p.is_file())
+        let resolved = match self.resolve_path(path) {
+            Some(resolved) => resolved,
+            None => return false,
+        };
+
+        if !self.is_valid_path(&resolved.relative) {
+            return false;
+        }
+
+        resolved.full.is_file()
     }
 
     fn get_file(&self, path: &Path) -> Option<Arc<StoredFile>> {
-        if !self.exists(path) {
+        let resolved = match self.resolve_path(path) {
+            Some(resolved) => resolved,
+            None => return None,
+        };
+
+        if !self.is_valid_path(&resolved.relative) {
             return None;
         }
 
-        let file_path = self.full_path(path)?;
+        if !resolved.full.is_file() {
+            return None;
+        }
+
         let mut cache = self.cache.lock().unwrap();
-        if let Some(file) = cache.get(&file_path) {
+        if let Some(file) = cache.get(&resolved.full) {
             return Some(file.clone());
         }
 
-        let file = Arc::new(FsFile::new_existing(&file_path).into());
-        cache.insert(file_path.clone(), Arc::clone(&file));
+        let file = Arc::new(FsFile::new_existing(&resolved.full).into());
+        cache.insert(resolved.full.clone(), Arc::clone(&file));
 
         Some(file)
     }
 
     fn upload(&self, path: &Path, mut reader: BufReader<File>) -> io::Result<()> {
-        let path = self.full_path(path).ok_or(io::Error::new(
+        let resolved = self.resolve_path(path).ok_or(io::Error::new(
             io::ErrorKind::InvalidInput,
             "provided file path is in an invalid place",
         ))?;
 
-        if !self.is_valid_path(&path) {
+        if !self.is_valid_path(&resolved.relative) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "cannot upload due to invalid file name or path",
             ));
         }
+
+        let path = resolved.full;
 
         // ensure parent directories exist, if any
         if let Some(parent) = path.parent() {
@@ -211,6 +248,9 @@ impl FileStorageCore for FsFileStore {
             digest.update(bytes);
         }
 
+        // don't keep the file open longer than it needs to be
+        drop(target_file);
+
         let hash = FileMetadata::hash_to_hex(digest);
         let metadata = FileMetadata {
             hash,
@@ -218,34 +258,62 @@ impl FileStorageCore for FsFileStore {
         };
 
         let metadata_path = metadata_path(&path);
-        let metadata_file = File::create(&metadata_path)?;
-        serde_json::to_writer(metadata_file, &metadata)?;
+        let metadata_tmp_path = metadata_path.with_extension("json.tmp");
+
+        let metadata_write_result = (|| -> io::Result<()> {
+            let mut metadata_file = File::create(&metadata_tmp_path)?;
+            serde_json::to_writer(&mut metadata_file, &metadata)?;
+            metadata_file.sync_all()?;
+
+            if let Err(err) = fs::rename(&metadata_tmp_path, &metadata_path) {
+                if metadata_path.is_file() {
+                    fs::remove_file(&metadata_path)?;
+                    fs::rename(&metadata_tmp_path, &metadata_path)?;
+                } else {
+                    return Err(err);
+                }
+            }
+
+            Ok(())
+        })();
+
+        if let Err(err) = metadata_write_result {
+            let _ = fs::remove_file(&metadata_tmp_path);
+            let _ = fs::remove_file(&path);
+            return Err(err);
+        }
+
+        let mut cache = self.cache.lock().unwrap();
+        cache.remove(&path);
 
         Ok(())
     }
 
     fn remove(&self, path: &Path) -> io::Result<()> {
-        let path = self.full_path(path).ok_or(io::Error::new(
+        let resolved = self.resolve_path(path).ok_or(io::Error::new(
             io::ErrorKind::InvalidInput,
             "provided file path is in an invalid place",
         ))?;
 
-        if !self.is_valid_path(&path) {
+        if !self.is_valid_path(&resolved.relative) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "cannot remove due to invalid file name or path",
             ));
         }
 
-        if !self.exists(&path) {
+        if !resolved.full.is_file() {
             return Ok(());
         }
 
-        fs::remove_file(&path)?;
-        let metadata_path = metadata_path(&path);
+        fs::remove_file(&resolved.full)?;
+        let metadata_path = metadata_path(&resolved.full);
         if metadata_path.is_file() {
-            fs::remove_file(metadata_path)?;
+            fs::remove_file(&metadata_path)?;
         }
+
+        let mut cache = self.cache.lock().unwrap();
+        cache.remove(&resolved.full);
 
         Ok(())
     }
@@ -253,7 +321,7 @@ impl FileStorageCore for FsFileStore {
 
 pub const METADATA_FILE_EXT: &str = ".metadata.json";
 
-fn metadata_path(path: &PathBuf) -> PathBuf {
+fn metadata_path(path: &Path) -> PathBuf {
     let mut os_str = path
         .file_name()
         .map(|s| s.to_os_string())
@@ -303,7 +371,10 @@ impl StoredFileCore for FsFile {
     }
 
     fn bytes_iter(&self) -> Box<dyn Iterator<Item = io::Result<Vec<u8>>> + 'static> {
-        let file = File::open(&self.path).unwrap();
+        let file = match File::open(&self.path) {
+            Ok(file) => file,
+            Err(err) => return Box::new(iter::once(Err(err))),
+        };
 
         let mut reader = BufReader::new(file);
         let mut buffer = [0; 8192];
@@ -318,17 +389,14 @@ impl StoredFileCore for FsFile {
             let bytes_read = match reader.read(&mut buffer) {
                 Ok(0) => return None, // EOF
                 Ok(n) => n,
-                Err(_) => {
+                Err(err) => {
                     // mark as failed, so we don't keep trying but so we can return an error once
                     is_failed = true;
-                    return Some(Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "Failed to read file",
-                    )));
+                    return Some(Err(err));
                 }
             };
 
-            return Some(Ok(Vec::from(&buffer[..bytes_read])));
+            Some(Ok(Vec::from(&buffer[..bytes_read])))
         }))
     }
 }
