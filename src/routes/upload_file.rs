@@ -5,7 +5,7 @@ use std::{
 
 use actix_multipart::form::{MultipartForm, tempfile::TempFile};
 use actix_web::{
-    HttpResponse, Responder, delete, post,
+    HttpResponse, Responder, delete, get, post,
     web::{self, Data},
 };
 
@@ -58,6 +58,17 @@ pub async fn delete_file(
         Err(err) => {
             eprintln!("Error deleting file: {err}");
             HttpResponse::InternalServerError().body("Failed to delete file")
+        }
+    }
+}
+
+#[get("/files")]
+pub async fn list_files(file_store: Data<SharedFileStore>) -> impl Responder {
+    match file_store.list() {
+        Ok(files) => HttpResponse::Ok().json(files),
+        Err(err) => {
+            eprintln!("Error listing files: {err}");
+            HttpResponse::InternalServerError().body("Failed to list files")
         }
     }
 }

@@ -5,7 +5,7 @@ use crate::{
     authorized::is_authorized,
     routes::{
         ScopeCreator,
-        upload_file::{delete_file, upload_file},
+        upload_file::{delete_file, list_files, upload_file},
     },
 };
 
@@ -16,6 +16,7 @@ impl ScopeCreator for ApiRoute {
         Scope::new("/api")
             .app_data(MultipartFormConfig::default())
             .wrap(middleware::from_fn(is_authorized))
+            .service(list_files)
             .service(upload_file)
             .service(delete_file)
     }
