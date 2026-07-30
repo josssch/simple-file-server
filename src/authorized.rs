@@ -15,10 +15,10 @@ use sha2::Sha256;
 
 #[derive(Debug, Deserialize)]
 pub struct AuthPayload {
-    #[allow(unused)]
     permissions: Vec<String>,
 }
 
+#[allow(unused)]
 impl AuthPayload {
     pub fn permissions(&self) -> &[String] {
         &self.permissions

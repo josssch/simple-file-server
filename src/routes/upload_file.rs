@@ -9,7 +9,7 @@ use actix_web::{
     web::{self, Data},
 };
 
-use crate::{SharedFileStore, file_store::FileStorageCore};
+use crate::SharedFileStore;
 
 #[derive(Debug, MultipartForm)]
 struct UploadFileForm {
@@ -29,8 +29,9 @@ pub async fn upload_file(
     file_store: Data<SharedFileStore>,
 ) -> impl Responder {
     let path = PathBuf::from(path.into_inner());
+    let mut reader = BufReader::new(form.file.file);
 
-    match file_store.upload(&path, BufReader::new(form.file.file.into_file())) {
+    match file_store.upload(&path, &mut reader) {
         Ok(_) => HttpResponse::Created().finish(),
         Err(err) if err.kind() == io::ErrorKind::InvalidInput => {
             HttpResponse::BadRequest().body(format!("Invalid input: {err}"))

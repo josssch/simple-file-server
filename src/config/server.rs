@@ -1,20 +1,36 @@
+use std::{io, sync::Arc};
+
 use serde::{Deserialize, Serialize};
 use serde_default::DefaultFromSerde;
 
-use crate::config::file::ConfigFile;
+use crate::{
+    config::file::ConfigFile,
+    storage::{DynFileStore, FsFileStore, MemoryFileStore},
+};
 
 pub const SERVER_CONFIG_NAME: &str = "config/server.json";
+pub const DEFAULT_LOCAL_BASE_DIR: &str = "files";
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FileSource {
     Local { base_dir: String },
+    Memory,
+}
+
+pub fn build_file_store(config: &FileSource) -> io::Result<Arc<dyn DynFileStore>> {
+    let store: Arc<dyn DynFileStore> = match config {
+        FileSource::Local { base_dir } => Arc::new(FsFileStore::new(base_dir)),
+        FileSource::Memory => Arc::new(MemoryFileStore::new()),
+    };
+
+    Ok(store)
 }
 
 impl Default for FileSource {
     fn default() -> Self {
         FileSource::Local {
-            base_dir: "files".into(),
+            base_dir: DEFAULT_LOCAL_BASE_DIR.into(),
         }
     }
 }

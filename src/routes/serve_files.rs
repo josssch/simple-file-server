@@ -1,9 +1,9 @@
-use std::path::Path;
+use std::{io::Read, iter, path::Path};
 
 use actix_web::{
     HttpRequest, HttpResponse, Responder, Scope,
     dev::HttpServiceFactory,
-    error, get,
+    error, guard,
     http::header::{self, ContentType},
     middleware::Compress,
     mime,
@@ -12,18 +12,31 @@ use actix_web::{
 use futures::stream;
 use serde::{Deserialize, Deserializer};
 
-use crate::{
-    SharedFileStore,
-    file_store::{FileStorageCore, StoredFileCore},
-    routes::ScopeCreator,
-};
+use crate::{SharedFileStore, routes::ScopeCreator};
 
 pub struct FileServeRoute;
 
 impl ScopeCreator for FileServeRoute {
     fn create_scope() -> impl HttpServiceFactory {
-        Scope::new("").wrap(Compress::default()).service(serve_file)
+        Scope::new("").wrap(Compress::default()).route(
+            "/{file_path:.*}",
+            web::get()
+                .guard(guard::fn_guard(not_api_path))
+                .to(serve_file),
+        )
     }
+}
+
+fn not_api_path(ctx: &guard::GuardContext<'_>) -> bool {
+    let path = ctx.head().uri.path();
+    let trimmed = path.trim_start_matches('/');
+
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let first_segment = trimmed.split('/').next().unwrap_or("");
+    first_segment != "api"
 }
 
 fn string_bool<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
@@ -41,8 +54,7 @@ struct FileOptions {
     download: bool,
 }
 
-#[get("/{file_path:.*}")]
-pub async fn serve_file(
+async fn serve_file(
     req: HttpRequest,
     path: web::Path<String>,
     query: Query<FileOptions>,
@@ -66,7 +78,33 @@ pub async fn serve_file(
         return HttpResponse::NotModified().finish();
     }
 
-    let bytes_iter = file.bytes_iter();
+    let mut reader = match file.open_reader() {
+        Ok(reader) => reader,
+        Err(err) => {
+            eprintln!("Error opening file for read: {err}");
+            return HttpResponse::InternalServerError().body("Failed to read file");
+        }
+    };
+
+    let mut buffer = [0u8; 8192];
+    let mut is_failed = false;
+
+    let bytes_iter = iter::from_fn(move || {
+        if is_failed {
+            return None;
+        }
+
+        let bytes_read = match Read::read(&mut *reader, &mut buffer) {
+            Ok(0) => return None,
+            Ok(n) => n,
+            Err(err) => {
+                is_failed = true;
+                return Some(Err(err));
+            }
+        };
+
+        Some(Ok(Vec::from(&buffer[..bytes_read])))
+    });
 
     HttpResponse::Ok()
         .insert_header((header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"))

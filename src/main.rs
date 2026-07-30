@@ -1,20 +1,20 @@
 mod authorized;
 mod cache_map;
 mod config;
-mod file_store;
 mod routes;
+mod storage;
 
-use std::{io, sync::Arc};
+use std::io;
 
 use actix_web::{App, HttpServer, web::Data};
 
 use crate::{
-    config::server::ServerConfig,
-    file_store::FileStore,
+    config::server::{ServerConfig, build_file_store},
     routes::{ScopeCreator, api::ApiRoute, serve_files::FileServeRoute},
+    storage::DynFileStore,
 };
 
-pub type SharedFileStore = Arc<FileStore>;
+pub type SharedFileStore = dyn DynFileStore;
 
 #[actix_web::main]
 async fn main() -> io::Result<()> {
@@ -26,8 +26,7 @@ async fn main() -> io::Result<()> {
 
     println!("Starting server at http://{}:{}", config.host, config.port);
 
-    let file_store: Data<SharedFileStore> =
-        Data::new(Arc::new(FileStore::from(&config.files_source)));
+    let file_store: Data<SharedFileStore> = Data::from(build_file_store(&config.files_source)?);
     let config_data: Data<ServerConfig> = Data::new(config);
 
     HttpServer::new(move || {

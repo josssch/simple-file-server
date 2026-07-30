@@ -18,6 +18,7 @@ pub struct CacheMap<K: Hash + Eq + Clone, V> {
     max_size: usize,
 }
 
+#[allow(unused)]
 impl<K: Hash + Eq + Clone, V> CacheMap<K, V> {
     pub fn new() -> Self {
         CacheMap {
