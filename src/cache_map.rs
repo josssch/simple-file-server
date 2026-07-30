@@ -73,6 +73,10 @@ impl<K: Hash + Eq + Clone, V> CacheMap<K, V> {
         self.inner.insert(key, entry);
     }
 
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        self.inner.remove(key).map(|entry| entry.inner)
+    }
+
     pub fn evict_lru(&mut self) {
         if let Some(key) = self
             .inner
